@@ -1,12 +1,12 @@
-import os
+
 from flask import Flask, request, jsonify
-from functools import wraps
 from pytrends.request import TrendReq
 import pandas as pd
-import datetime
+from functools import wraps
+import os
+from datetime import datetime
 
 app = Flask(__name__)
-pytrends = TrendReq(hl='en-US', tz=360)
 
 API_KEY = os.environ.get('API_KEY')
 
@@ -14,59 +14,49 @@ def require_api_key(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         key = request.headers.get('X-API-KEY') or request.args.get('api_key')
-        print("API_KEY from env:", API_KEY)
-        print("Received API key:", key)
         if not key or key != API_KEY:
             return jsonify({'error': 'Unauthorized'}), 401
         return f(*args, **kwargs)
     return decorated
 
+pytrends = TrendReq(hl='en-US', tz=360)
+
 def convert_timestamp_to_string(df):
-    # If date is datetime already
-    if pd.api.types.is_datetime64_any_dtype(df['date']):
-        df['date'] = df['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
-    else:
-        # If date is timestamp in ms (int)
-        df['date'] = df['date'].apply(
-            lambda ts: datetime.datetime.utcfromtimestamp(ts / 1000).strftime('%Y-%m-%d %H:%M:%S')
-        )
+    df['date'] = df['date'].apply(lambda x: x.strftime("%Y-%m-%d %H:%M:%S"))
     return df
 
-@app.route('/')
-def home():
-    return 'Google Trends API is running!'
-
-@app.route('/trends')
+@app.route('/trends', methods=['GET'])
 @require_api_key
 def get_trends():
     keywords = request.args.get('keyword')
-    geo_codes = request.args.get('geo', '')
-    timeframe = request.args.get('time', 'today 12-m')
+    geo = request.args.get('geo', '')  # e.g. 'US' or multiple separated by comma
+    timeframe = request.args.get('timeframe', 'today 12-m')  # default 12 months
 
     if not keywords:
-        return jsonify({'error': 'Missing keyword'}), 400
+        return jsonify({'error': 'keyword parameter required'}), 400
 
-    keyword_list = [kw.strip() for kw in keywords.split(',')]
-    if len(keyword_list) > 5:
-        return jsonify({'error': 'Google Trends only supports up to 5 keywords at a time'}), 400
-
-    geo_list = [g.strip() for g in geo_codes.split(',')] if geo_codes else ['']
+    keyword_list = [k.strip() for k in keywords.split(',')]
+    geo_list = [g.strip() for g in geo.split(',')] if geo else ['']
 
     combined_results = []
 
-    for geo in geo_list:
+    for geo_code in geo_list:
         try:
-            pytrends.build_payload(keyword_list, geo=geo, timeframe=timeframe)
+            pytrends.build_payload(keyword_list, geo=geo_code, timeframe=timeframe)
             df = pytrends.interest_over_time()
             if df.empty:
                 continue
 
             df = df.reset_index()
-            df['geo'] = geo
-            df = df[['date'] + keyword_list + ['geo']]
-            combined_results.append(df)
+            df['geo'] = geo_code
+
+            # Melt wide df with keywords columns into long format
+            df_long = df.melt(id_vars=['date', 'geo'], value_vars=keyword_list,
+                              var_name='keyword', value_name='value')
+            combined_results.append(df_long)
+
         except Exception as e:
-            print(f"Error with geo={geo}: {e}")
+            print(f"Error fetching trends for geo={geo_code}: {e}")
 
     if not combined_results:
         return jsonify({'error': 'No data found'}), 404
@@ -74,7 +64,7 @@ def get_trends():
     final_df = pd.concat(combined_results)
     final_df = convert_timestamp_to_string(final_df)
 
-    return final_df.to_json(orient='records')
+    # Convert DataFrame to list of dicts (JSON)
+    result = final_df.to_dict(orient='records')
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 8000)))
+    return jsonify(result)

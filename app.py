@@ -1,4 +1,3 @@
-
 from flask import Flask, request, jsonify
 from pytrends.request import TrendReq
 import pandas as pd
@@ -9,6 +8,7 @@ from datetime import datetime
 app = Flask(__name__)
 
 API_KEY = os.environ.get('API_KEY')
+proxy_list = [p.strip() for p in os.getenv("PROXIES", "").split(",") if p.strip()]
 
 def require_api_key(f):
     @wraps(f)
@@ -18,12 +18,6 @@ def require_api_key(f):
             return jsonify({'error': 'Unauthorized'}), 401
         return f(*args, **kwargs)
     return decorated
-
-
-proxy_list = os.getenv("PROXIES", "").split(",")
-
-pytrends = TrendReq(hl='en-US', tz=360, proxies=proxy_list)
-
 
 def convert_timestamp_to_string(df):
     df['date'] = df['date'].apply(lambda x: x.strftime("%Y-%m-%d %H:%M:%S"))
@@ -46,6 +40,8 @@ def get_trends():
 
     for geo_code in geo_list:
         try:
+            # ✅ Moved pytrends instance inside the loop
+            pytrends = TrendReq(hl='en-US', tz=360, proxies=proxy_list)
             pytrends.build_payload(keyword_list, geo=geo_code, timeframe=timeframe)
             df = pytrends.interest_over_time()
             if df.empty:
@@ -54,7 +50,6 @@ def get_trends():
             df = df.reset_index()
             df['geo'] = geo_code
 
-            # Melt wide df with keywords columns into long format
             df_long = df.melt(id_vars=['date', 'geo'], value_vars=keyword_list,
                               var_name='keyword', value_name='value')
             combined_results.append(df_long)
@@ -68,7 +63,4 @@ def get_trends():
     final_df = pd.concat(combined_results)
     final_df = convert_timestamp_to_string(final_df)
 
-    # Convert DataFrame to list of dicts (JSON)
-    result = final_df.to_dict(orient='records')
-
-    return jsonify(result)
+    return jsonify(final_df.to_dict(orient='records'))

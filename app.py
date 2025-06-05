@@ -19,7 +19,11 @@ def require_api_key(f):
         return f(*args, **kwargs)
     return decorated
 
-pytrends = TrendReq(hl='en-US', tz=360)
+
+proxy_list = os.getenv("PROXIES", "").split(",")
+
+pytrends = TrendReq(hl='en-US', tz=360, proxies=proxy_list)
+
 
 def convert_timestamp_to_string(df):
     df['date'] = df['date'].apply(lambda x: x.strftime("%Y-%m-%d %H:%M:%S"))
